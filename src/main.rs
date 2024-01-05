@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use core::panic;
 use std::{os::unix::fs, path::Path, process::Stdio};
 
 // Usage: your_docker.sh run <image> <command> <arg1> <arg2> ...
@@ -25,31 +26,39 @@ fn main() -> Result<()> {
     std::env::set_current_dir("/")?;
     let command_call = Path::new("/").join(command_path);
 
-    let output = std::process::Command::new(command_call)
-        .current_dir("/")
-        .args(command_args)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .env_clear()
-        .output()
-        .with_context(|| {
-            format!(
-                "Tried to run '{}' with arguments {:?}, in temp file {:?}",
-                command_path.to_str().unwrap(),
-                command_args,
-                temp_dir_path
-            )
-        })?;
+    unsafe {
+        match libc::fork() {
+            -1 => panic!("Failed to fork"),
+            0 => {
+                let output = std::process::Command::new(command_call)
+                    .current_dir("/")
+                    .args(command_args)
+                    .stdin(Stdio::inherit())
+                    .stdout(Stdio::inherit())
+                    .stderr(Stdio::inherit())
+                    .env_clear()
+                    .output()
+                    .with_context(|| {
+                        format!(
+                            "Tried to run '{}' with arguments {:?}, in temp file {:?}",
+                            command_path.to_str().unwrap(),
+                            command_args,
+                            temp_dir_path
+                        )
+                    })?;
 
-    if output.status.success() {
-        let std_out = std::str::from_utf8(&output.stdout)?;
-        let std_err = std::str::from_utf8(&output.stderr)?;
-        print!("{}", std_out);
-        eprint!("{}", std_err);
-    } else {
-        std::process::exit(output.status.code().unwrap_or(1))
-    }
+                if output.status.success() {
+                    let std_out = std::str::from_utf8(&output.stdout)?;
+                    let std_err = std::str::from_utf8(&output.stderr)?;
+                    print!("{}", std_out);
+                    eprint!("{}", std_err);
+                } else {
+                    std::process::exit(output.status.code().unwrap_or(1))
+                }
+            }
+            i => panic!("Spork? {}", i),
+        }
+    };
 
     Ok(())
 }
